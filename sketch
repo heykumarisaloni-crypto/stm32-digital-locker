@@ -1,0 +1,210 @@
+/*
+  Digital Locker
+  Board : STM32 Nucleo-C031C6 (Wokwi simulation)
+
+  How it works:
+  - Type the 4-digit password and press '#'
+  - '*' clears what you typed
+  - Correct password  -> servo opens the lock, green LED on
+  - 3 wrong attempts  -> lockout for 10 seconds with buzzer
+*/
+
+#include "LiquidCrystal_I2C.h"
+#include <Keypad.h>
+#include <Servo.h>
+
+// ---------- Settings you can change ----------
+const String PASSWORD = "1234";
+const int MAX_WRONG_TRIES = 3;
+const unsigned long OPEN_TIME   = 5000;    // door stays open for 5 seconds
+const unsigned long LOCKOUT_TIME = 10000;  // lockout lasts 10 seconds
+
+// ---------- Pins ----------
+const int SERVO_PIN     = 6;
+const int BUZZER_PIN    = 7;
+const int GREEN_LED_PIN = 8;
+const int RED_LED_PIN   = 9;
+
+// ---------- Servo angles ----------
+const int LOCKED_ANGLE   = 20;
+const int UNLOCKED_ANGLE = 90;
+
+// ---------- LCD (address, columns, rows) ----------
+LiquidCrystal_I2C lcd(0x27, 20, 4);
+
+// ---------- Keypad ----------
+const byte ROWS = 4;
+const byte COLS = 4;
+byte rowPins[ROWS] = {5, 4, 3, 2};
+byte colPins[COLS] = {A3, A2, A1, A0};
+char keys[ROWS][COLS] = {
+  {'1', '2', '3', 'A'},
+  {'4', '5', '6', 'B'},
+  {'7', '8', '9', 'C'},
+  {'*', '0', '#', 'D'}
+};
+Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
+
+Servo lockServo;
+
+// ---------- Locker states ----------
+enum State { LOCKED, UNLOCKED, LOCKOUT };
+State state = LOCKED;
+
+String typedCode = "";          // digits typed so far
+int wrongTries = 0;             // wrong attempts in a row
+unsigned long stateStartTime = 0;
+int lastSecondShown = -1;
+
+
+// ---------- Screen helpers ----------
+void showMessage(const char* line1, const char* line2) {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print(line1);
+  lcd.setCursor(0, 1);
+  lcd.print(line2);
+}
+
+void showPasswordScreen() {
+  lcd.clear();
+  lcd.setCursor(0, 0);
+  lcd.print("Enter password:");
+  lcd.setCursor(0, 1);
+  for (unsigned int i = 0; i < typedCode.length(); i++) {
+    lcd.print('*');             // hide the digits
+  }
+}
+
+
+// ---------- Lock actions ----------
+void lockDoor() {
+  state = LOCKED;
+  typedCode = "";
+  lockServo.write(LOCKED_ANGLE);
+  digitalWrite(GREEN_LED_PIN, LOW);
+  digitalWrite(RED_LED_PIN, HIGH);
+  showPasswordScreen();
+  Serial.println("State: LOCKED");
+}
+
+void unlockDoor() {
+  state = UNLOCKED;
+  stateStartTime = millis();
+  wrongTries = 0;
+  typedCode = "";
+  lockServo.write(UNLOCKED_ANGLE);
+  digitalWrite(GREEN_LED_PIN, HIGH);
+  digitalWrite(RED_LED_PIN, LOW);
+  tone(BUZZER_PIN, 2000, 150);
+  showMessage("Access granted", "Door unlocked");
+  Serial.println("State: UNLOCKED");
+}
+
+void startLockout() {
+  state = LOCKOUT;
+  stateStartTime = millis();
+  lastSecondShown = -1;
+  typedCode = "";
+  digitalWrite(RED_LED_PIN, HIGH);
+  tone(BUZZER_PIN, 800, 1000);
+  Serial.println("State: LOCKOUT");
+}
+
+
+// ---------- Password check ----------
+void checkPassword() {
+  if (typedCode == PASSWORD) {
+    unlockDoor();
+    return;
+  }
+
+  wrongTries++;
+  typedCode = "";
+  Serial.print("Wrong password. Attempt: ");
+  Serial.println(wrongTries);
+
+  if (wrongTries >= MAX_WRONG_TRIES) {
+    startLockout();
+  } else {
+    tone(BUZZER_PIN, 800, 300);
+    showMessage("Wrong password", "Try again");
+    delay(1000);
+    showPasswordScreen();
+  }
+}
+
+
+// ---------- What each key does (only when locked) ----------
+void handleKey(char key) {
+  if (key >= '0' && key <= '9') {
+    if (typedCode.length() < PASSWORD.length()) {
+      typedCode += key;
+      showPasswordScreen();
+    }
+  }
+  else if (key == '*') {        // clear
+    typedCode = "";
+    showPasswordScreen();
+  }
+  else if (key == '#') {        // enter
+    checkPassword();
+  }
+}
+
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(BUZZER_PIN, OUTPUT);
+  pinMode(GREEN_LED_PIN, OUTPUT);
+  pinMode(RED_LED_PIN, OUTPUT);
+
+  lcd.init();
+  lcd.backlight();
+
+  lockServo.attach(SERVO_PIN);
+
+  showMessage("Digital Locker", "Starting...");
+  delay(1000);
+
+  lockDoor();                   // start in locked state
+}
+
+
+void loop() {
+  char key = keypad.getKey();   // returns 0 if no key is pressed
+
+  if (state == LOCKED) {
+    if (key) handleKey(key);
+  }
+
+  else if (state == UNLOCKED) {
+    // lock again automatically after OPEN_TIME
+    if (millis() - stateStartTime >= OPEN_TIME) {
+      lockDoor();
+    }
+  }
+
+  else if (state == LOCKOUT) {
+    unsigned long timePassed = millis() - stateStartTime;
+
+    if (timePassed >= LOCKOUT_TIME) {
+      wrongTries = 0;
+      lockDoor();
+    } else {
+      int secondsLeft = (LOCKOUT_TIME - timePassed) / 1000 + 1;
+
+      if (secondsLeft != lastSecondShown) {   // update once per second
+        lastSecondShown = secondsLeft;
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("LOCKED OUT");
+        lcd.setCursor(0, 1);
+        lcd.print("Wait ");
+        lcd.print(secondsLeft);
+        lcd.print(" s");
+      }
+    }
+  }
+}
