@@ -48,13 +48,11 @@ Default password: `1234` (can be changed in the code)
 3. Click the keypad buttons to enter the password and press `#`.
 
 ## Demo Video
-[Watch the demo video](demo/demo.mp4)
+[Watch the demo video](simulation)
 
 The video shows the circuit running in Wokwi: correct password, wrong password and the 10-second lockout.
 
-## Screenshots
-![Circuit](images/circuit.png)
-![Output](images/output.png)
+
 
 ## Test Results
 | Test | Input | Expected | Result |
